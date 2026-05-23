@@ -9,6 +9,186 @@ const PORT = process.env.PORT || 3001;
 const SMS_PROMPT_PREFIX =
   'Это SMS от Kaspi Bank. Извлеки транзакцию и верни ТОЛЬКО один JSON объект: { "date": "ДД.ММ.ГГГГ", "merchant": "название", "amount": число (отрицательное=расход), "category": "еда/транспорт/покупки/здоровье/развлечения/переводы/другое", "type": "expense/income" }. Только JSON без markdown. SMS: ';
 
+const FINMIND_SMS_URL = 'https://finmind4-production.up.railway.app/sms';
+
+function buildFinMindShortcutPlist() {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>WFWorkflowActions</key>
+	<array>
+		<dict>
+			<key>WFWorkflowActionIdentifier</key>
+			<string>is.workflow.actions.downloadurl</string>
+			<key>WFWorkflowActionParameters</key>
+			<dict>
+				<key>UUID</key>
+				<string>F1N00001-0001-4000-8000-000000000001</string>
+				<key>ShowHeaders</key>
+				<true/>
+				<key>ShowWhenRun</key>
+				<false/>
+				<key>WFHTTPMethod</key>
+				<string>POST</string>
+				<key>WFHTTPBodyType</key>
+				<string>JSON</string>
+				<key>WFURL</key>
+				<string>${FINMIND_SMS_URL}</string>
+				<key>WFHTTPHeaders</key>
+				<dict>
+					<key>Value</key>
+					<dict>
+						<key>WFDictionaryFieldValueItems</key>
+						<array>
+							<dict>
+								<key>WFItemType</key>
+								<integer>0</integer>
+								<key>WFKey</key>
+								<dict>
+									<key>Value</key>
+									<dict>
+										<key>string</key>
+										<string>Content-Type</string>
+									</dict>
+									<key>WFSerializationType</key>
+									<string>WFTextTokenString</string>
+								</dict>
+								<key>WFValue</key>
+								<dict>
+									<key>Value</key>
+									<dict>
+										<key>string</key>
+										<string>application/json</string>
+									</dict>
+									<key>WFSerializationType</key>
+									<string>WFTextTokenString</string>
+								</dict>
+							</dict>
+						</array>
+					</dict>
+					<key>WFSerializationType</key>
+					<string>WFDictionaryFieldValue</string>
+				</dict>
+				<key>WFJSONValues</key>
+				<dict>
+					<key>Value</key>
+					<dict>
+						<key>WFDictionaryFieldValueItems</key>
+						<array>
+							<dict>
+								<key>WFItemType</key>
+								<integer>0</integer>
+								<key>WFKey</key>
+								<dict>
+									<key>Value</key>
+									<dict>
+										<key>string</key>
+										<string>text</string>
+									</dict>
+									<key>WFSerializationType</key>
+									<string>WFTextTokenString</string>
+								</dict>
+								<key>WFValue</key>
+								<dict>
+									<key>Value</key>
+									<dict>
+										<key>Type</key>
+										<string>ExtensionInput</string>
+									</dict>
+									<key>WFSerializationType</key>
+									<string>WFTextTokenAttachment</string>
+								</dict>
+							</dict>
+						</array>
+					</dict>
+					<key>WFSerializationType</key>
+					<string>WFDictionaryFieldValue</string>
+				</dict>
+			</dict>
+		</dict>
+	</array>
+	<key>WFWorkflowClientRelease</key>
+	<string>3.0.0</string>
+	<key>WFWorkflowClientVersion</key>
+	<string>2302.0.4</string>
+	<key>WFWorkflowHasShortcutInputVariables</key>
+	<true/>
+	<key>WFWorkflowIcon</key>
+	<dict>
+		<key>WFWorkflowIconGlyphNumber</key>
+		<integer>59511</integer>
+		<key>WFWorkflowIconStartColor</key>
+		<integer>463140863</integer>
+	</dict>
+	<key>WFWorkflowImportQuestions</key>
+	<array/>
+	<key>WFWorkflowInputContentItemClasses</key>
+	<array>
+		<string>WFStringContentItem</string>
+	</array>
+	<key>WFWorkflowMinimumClientVersion</key>
+	<integer>900</integer>
+	<key>WFWorkflowMinimumClientVersionString</key>
+	<string>900</string>
+	<key>WFWorkflowName</key>
+	<string>FinMind</string>
+	<key>WFWorkflowOutputContentItemClasses</key>
+	<array/>
+	<key>WFWorkflowTriggers</key>
+	<array>
+		<dict>
+			<key>WFTriggerType</key>
+			<string>Messages</string>
+			<key>WFTriggerFilter</key>
+			<dict>
+				<key>Value</key>
+				<dict>
+					<key>WFActionParameterFilterPrefix</key>
+					<integer>1</integer>
+					<key>WFContentPredicateBoundedDate</key>
+					<false/>
+					<key>WFActionParameterFilterTemplates</key>
+					<array>
+						<dict>
+							<key>Operator</key>
+							<integer>99</integer>
+							<key>Property</key>
+							<string>Sender</string>
+							<key>Removable</key>
+							<true/>
+							<key>Values</key>
+							<dict>
+								<key>String</key>
+								<string>Kaspi</string>
+								<key>Unit</key>
+								<integer>4</integer>
+							</dict>
+						</dict>
+					</array>
+				</dict>
+				<key>WFSerializationType</key>
+				<string>WFContentPredicateTableTemplate</string>
+			</dict>
+		</dict>
+	</array>
+	<key>WFWorkflowTypes</key>
+	<array/>
+</dict>
+</plist>
+`;
+}
+
+function handleShortcut(res) {
+  const plist = buildFinMindShortcutPlist();
+  res.writeHead(200, {
+    'Content-Type': 'application/octet-stream',
+    'Content-Disposition': 'attachment; filename="FinMind.shortcut"',
+    'Content-Length': Buffer.byteLength(plist, 'utf8'),
+  });
+  res.end(plist);
+}
+
 function callAnthropic(payload, { pdfBeta = false } = {}) {
   return new Promise((resolve, reject) => {
     const headers = {
@@ -143,11 +323,17 @@ http
       return;
     }
 
+    const pathname = new URL(req.url, 'http://localhost').pathname;
+
+    if (req.method === 'GET' && pathname === '/shortcut') {
+      handleShortcut(res);
+      return;
+    }
+
     let body = '';
     req.on('data', c => (body += c));
     req.on('end', () => {
       try {
-        const pathname = new URL(req.url, 'http://localhost').pathname;
         if (pathname === '/sms') {
           handleSms(res, body);
         } else {
