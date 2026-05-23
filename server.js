@@ -11,6 +11,9 @@ const SMS_PROMPT_PREFIX =
 
 const FINMIND_SMS_URL = 'https://finmind4-production.up.railway.app/sms';
 
+/** @type {Array<Record<string, unknown>>} */
+const pendingTransactions = [];
+
 function buildFinMindShortcutPlist() {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -179,6 +182,12 @@ function buildFinMindShortcutPlist() {
 `;
 }
 
+function handlePending(res) {
+  const batch = pendingTransactions.splice(0);
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ transactions: batch }));
+}
+
 function handleShortcut(res) {
   const plist = buildFinMindShortcutPlist();
   res.writeHead(200, {
@@ -264,6 +273,7 @@ function handleSms(res, body) {
     .then(data => {
       console.log('Anthropic SMS:', data.slice(0, 300));
       const transaction = parseTransactionJson(data);
+      pendingTransactions.push(transaction);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(transaction));
     })
@@ -327,6 +337,11 @@ http
 
     if (req.method === 'GET' && pathname === '/shortcut') {
       handleShortcut(res);
+      return;
+    }
+
+    if (req.method === 'GET' && pathname === '/pending') {
+      handlePending(res);
       return;
     }
 

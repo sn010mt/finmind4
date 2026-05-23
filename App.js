@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Clipboard from 'expo-clipboard';
 import * as DocumentPicker from 'expo-document-picker';
 import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -19,7 +21,7 @@ import {
 } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { parseKaspiStatementFromPdf } from './services/parseKaspiStatement';
-import { CATEGORY_LABELS } from './utils/categoryIcons';
+import { CATEGORY_LABELS, mapParsedTransactions } from './utils/categoryIcons';
 import { formatMerchantName } from './utils/formatMerchantName';
 import {
   detectRecurringDebts,
@@ -105,6 +107,22 @@ const DEFAULT_TRANSACTIONS = [
 ];
 
 const TRANSACTIONS_STORAGE_KEY = 'transactions';
+const FINMIND_SMS_URL = 'https://finmind4-production.up.railway.app/sms';
+const FINMIND_PENDING_URL = 'https://finmind4-production.up.railway.app/pending';
+const SMS_POLL_INTERVAL_MS = 30_000;
+
+const SMS_SETUP_STEPS = [
+  'Открой Shortcuts (Быстрые команды)',
+  'Нажми вкладку Automation → +',
+  "Выбери 'Message' → укажи отправителя 'Kaspi'",
+  "Нажми 'Run Immediately'",
+  {
+    text: "Добавь действие 'Get Contents of URL'",
+    copyUrl: FINMIND_SMS_URL,
+  },
+  'Method: POST, Body: JSON, добавь поле text = Последнее сообщение от Kaspi',
+  "Выключи 'Ask Before Running'",
+];
 
 const PERIODS = [
   { id: 'week', label: 'Неделя' },
@@ -141,6 +159,15 @@ function getDaysLeftInMonth(reference = new Date()) {
 
 function generateInsight(transactions) {
   return getTopCategoryInsight(transactions);
+}
+
+async function fetchPendingSmsTransactions() {
+  const response = await fetch(FINMIND_PENDING_URL);
+  if (!response.ok) {
+    throw new Error(`Pending fetch failed: ${response.status}`);
+  }
+  const data = await response.json();
+  return Array.isArray(data?.transactions) ? data.transactions : [];
 }
 
 async function persistAiInsight(insight) {
@@ -313,6 +340,78 @@ function DonutChart({ categories }) {
         )}
       </Svg>
     </View>
+  );
+}
+
+function SmsCaptureSetupModal({ visible, onClose }) {
+  const handleCopyUrl = async (url) => {
+    await Clipboard.setStringAsync(url);
+    Alert.alert('Скопировано', 'URL скопирован в буфер обмена');
+  };
+
+  const handleOpenShortcuts = () => {
+    Linking.openURL('shortcuts://').catch(() => {
+      Alert.alert('Ошибка', 'Не удалось открыть приложение Shortcuts');
+    });
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.smsSetupOverlay}>
+        <Pressable style={styles.modalBackdrop} onPress={onClose} />
+        <View style={styles.smsSetupCard}>
+          <View style={styles.smsSetupHeader}>
+            <Text style={styles.smsSetupTitle}>Автозахват SMS от Kaspi</Text>
+            <Text style={styles.smsSetupSubtitle}>
+              Настрой один раз — работает автоматически
+            </Text>
+            <Pressable style={styles.smsSetupClose} onPress={onClose} hitSlop={12}>
+              <Text style={styles.smsSetupCloseText}>✕</Text>
+            </Pressable>
+          </View>
+
+          <ScrollView
+            style={styles.smsSetupScroll}
+            contentContainerStyle={styles.smsSetupScrollContent}
+            showsVerticalScrollIndicator={false}
+          >
+            {SMS_SETUP_STEPS.map((step, index) => {
+              const isUrlStep = typeof step === 'object' && step.copyUrl;
+              const stepText = isUrlStep ? step.text : step;
+
+              return (
+                <View key={index} style={styles.smsSetupStepCard}>
+                  <View style={styles.smsSetupStepNumber}>
+                    <Text style={styles.smsSetupStepNumberText}>{index + 1}</Text>
+                  </View>
+                  <View style={styles.smsSetupStepBody}>
+                    <Text style={styles.smsSetupStepText}>{stepText}</Text>
+                    {isUrlStep ? (
+                      <Pressable
+                        style={({ pressed }) => [
+                          styles.smsSetupUrlChip,
+                          pressed && styles.smsSetupUrlChipPressed,
+                        ]}
+                        onPress={() => handleCopyUrl(step.copyUrl)}
+                      >
+                        <Text style={styles.smsSetupUrlText} selectable>
+                          {step.copyUrl}
+                        </Text>
+                        <Text style={styles.smsSetupUrlHint}>Нажми, чтобы скопировать</Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                </View>
+              );
+            })}
+          </ScrollView>
+
+          <Pressable style={styles.smsSetupOpenButton} onPress={handleOpenShortcuts}>
+            <Text style={styles.smsSetupOpenButtonText}>Открыть Shortcuts</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -749,6 +848,7 @@ function SettingsScreen({ onTransactionsLoaded }) {
   const [weeklyDigest, setWeeklyDigest] = useState(true);
   const [budgetAlerts, setBudgetAlerts] = useState(true);
   const [isParsingPdf, setIsParsingPdf] = useState(false);
+  const [smsSetupVisible, setSmsSetupVisible] = useState(false);
 
   const handleKaspiUpload = async () => {
     try {
@@ -800,7 +900,22 @@ function SettingsScreen({ onTransactionsLoaded }) {
             <Text style={styles.settingsArrow}>→</Text>
           )}
         </Pressable>
+        <Pressable
+          style={[styles.settingsRow, styles.settingsRowBorder]}
+          onPress={() => setSmsSetupVisible(true)}
+        >
+          <View style={styles.settingsRowLabelWrap}>
+            <Text style={styles.settingsRowIcon}>📲</Text>
+            <Text style={styles.settingsRowLabel}>Настроить автозахват SMS</Text>
+          </View>
+          <Text style={styles.settingsArrow}>→</Text>
+        </Pressable>
       </SettingsSection>
+
+      <SmsCaptureSetupModal
+        visible={smsSetupVisible}
+        onClose={() => setSmsSetupVisible(false)}
+      />
 
       <SettingsSection title="Уведомления">
         <SettingsRow
@@ -1158,6 +1273,47 @@ export default function App() {
     await persistAiInsight(insight);
   };
 
+  const mergePendingSmsIntoTransactions = async () => {
+    try {
+      const pending = await fetchPendingSmsTransactions();
+      if (!pending.length) {
+        return;
+      }
+
+      const mapped = mapParsedTransactions(pending);
+      setTransactions((prev) => {
+        const merged = [...mapped, ...prev];
+        void (async () => {
+          try {
+            await AsyncStorage.setItem(
+              TRANSACTIONS_STORAGE_KEY,
+              JSON.stringify(merged),
+            );
+            await recalculateInsight(merged);
+          } catch (error) {
+            console.error('Failed to persist pending SMS transactions:', error);
+          }
+        })();
+        return merged;
+      });
+    } catch (error) {
+      console.error('Failed to poll pending SMS transactions:', error);
+    }
+  };
+
+  useEffect(() => {
+    if (!onboardingComplete) {
+      return undefined;
+    }
+
+    mergePendingSmsIntoTransactions();
+    const intervalId = setInterval(
+      mergePendingSmsIntoTransactions,
+      SMS_POLL_INTERVAL_MS,
+    );
+    return () => clearInterval(intervalId);
+  }, [onboardingComplete]);
+
   useEffect(() => {
     async function loadStoredData() {
       try {
@@ -1509,6 +1665,123 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
+  },
+  smsSetupOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  smsSetupCard: {
+    backgroundColor: '#121212',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '92%',
+    paddingTop: 20,
+    paddingHorizontal: 20,
+    paddingBottom: Platform.OS === 'ios' ? 34 : 24,
+    borderTopWidth: 1,
+    borderTopColor: '#2a2a2a',
+  },
+  smsSetupHeader: {
+    marginBottom: 16,
+    paddingRight: 32,
+  },
+  smsSetupTitle: {
+    color: '#FFFFFF',
+    fontSize: 22,
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+  smsSetupSubtitle: {
+    color: '#9E9E9E',
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  smsSetupClose: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  smsSetupCloseText: {
+    color: '#9E9E9E',
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  smsSetupScroll: {
+    flexGrow: 0,
+  },
+  smsSetupScrollContent: {
+    gap: 10,
+    paddingBottom: 16,
+  },
+  smsSetupStepCard: {
+    flexDirection: 'row',
+    backgroundColor: '#1a1a1a',
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#2a2a2a',
+  },
+  smsSetupStepNumber: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#0a2a1a',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+    marginTop: 2,
+  },
+  smsSetupStepNumberText: {
+    color: '#4CAF50',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  smsSetupStepBody: {
+    flex: 1,
+  },
+  smsSetupStepText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  smsSetupUrlChip: {
+    marginTop: 10,
+    backgroundColor: '#0a2a1a',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#1e4d2b',
+  },
+  smsSetupUrlChipPressed: {
+    opacity: 0.75,
+  },
+  smsSetupUrlText: {
+    color: '#4CAF50',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
+  },
+  smsSetupUrlHint: {
+    color: '#6b9e76',
+    fontSize: 12,
+    marginTop: 6,
+  },
+  smsSetupOpenButton: {
+    backgroundColor: '#4CAF50',
+    borderRadius: 12,
+    paddingVertical: 16,
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  smsSetupOpenButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
   },
   sectionTitle: {
     color: '#FFFFFF',
