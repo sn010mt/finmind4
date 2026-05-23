@@ -17,7 +17,7 @@ export async function parseKaspiStatementFromPdf(fileUri, fileName) {
   if (!response.ok) throw new Error('Ошибка сервера: ' + response.status);
 
   const data = await response.json();
-  const content = data.choices?.[0]?.message?.content;
+  const content = data.content?.[0]?.text;
   if (!content) throw new Error('Ошибка: ' + JSON.stringify(data));
 
   const cleaned = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
