@@ -1,7 +1,7 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import { mapParsedTransactions } from '../utils/categoryIcons';
 
-const PROXY_URL = 'http://172.20.10.3:3001';
+const PROXY_URL = 'https://finmind4-production.up.railway.app';
 
 export async function parseKaspiStatementFromPdf(fileUri, fileName) {
   const base64 = await FileSystem.readAsStringAsync(fileUri, {

@@ -5,7 +5,7 @@ const https = require('https');
 const { Buffer } = require('buffer');
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
