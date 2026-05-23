@@ -21,6 +21,7 @@ export async function parseKaspiStatementFromPdf(fileUri, fileName) {
   if (!content) throw new Error('Ошибка: ' + JSON.stringify(data));
 
   const cleaned = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-  const transactions = JSON.parse(cleaned.slice(cleaned.indexOf('['), cleaned.lastIndexOf(']') + 1));
+  const jsonStr = cleaned.slice(cleaned.indexOf('['), cleaned.lastIndexOf(']') + 1);
+  const transactions = JSON.parse(jsonStr);
   return mapParsedTransactions(transactions);
 }
