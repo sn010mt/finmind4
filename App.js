@@ -21,7 +21,7 @@ import {
 } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { parseKaspiStatementFromPdf } from './services/parseKaspiStatement';
-import { CATEGORY_LABELS, mapParsedTransactions } from './utils/categoryIcons';
+import { CATEGORY_LABELS } from './utils/categoryIcons';
 import { formatMerchantName } from './utils/formatMerchantName';
 import {
   detectRecurringDebts,
@@ -107,21 +107,24 @@ const DEFAULT_TRANSACTIONS = [
 ];
 
 const TRANSACTIONS_STORAGE_KEY = 'transactions';
-const FINMIND_SMS_URL = 'https://finmind4-production.up.railway.app/sms';
-const FINMIND_PENDING_URL = 'https://finmind4-production.up.railway.app/pending';
+const PROXY_URL = 'https://finmind4-production.up.railway.app';
+const FINMIND_SMS_URL = `${PROXY_URL}/sms`;
 const SMS_POLL_INTERVAL_MS = 30_000;
 
 const SMS_SETUP_STEPS = [
-  'Открой Shortcuts (Быстрые команды)',
-  'Нажми вкладку Automation → +',
-  "Выбери 'Message' → укажи отправителя 'Kaspi'",
-  "Нажми 'Run Immediately'",
+  'Шаг 1: Открой приложение «Быстрые команды» (Shortcuts)',
+  'Шаг 2: Нажми вкладку «Автоматизация» внизу',
+  'Шаг 3: Нажми «+» → «Создать личную автоматизацию»',
+  'Шаг 4: Выбери «Сообщение» → в поле «От:» введи «Kaspi» → нажми Готово',
+  'Шаг 5: Нажми «Далее» → «Добавить действие»',
+  'Шаг 6: Найди действие «Получить содержимое URL» → добавь его',
   {
-    text: "Добавь действие 'Get Contents of URL'",
+    text: 'Шаг 7: В поле URL вставь:',
     copyUrl: FINMIND_SMS_URL,
   },
-  'Method: POST, Body: JSON, добавь поле text = Последнее сообщение от Kaspi',
-  "Выключи 'Ask Before Running'",
+  'Шаг 8: Измени метод с GET на POST',
+  'Шаг 9: Нажми «Добавить поле» → выбери JSON → добавь ключ "text", значение — нажми на поле значения и выбери переменную «Содержимое сообщения»',
+  'Шаг 10: Нажми «Далее» → ВЫКЛЮЧИ тумблер «Спрашивать перед запуском» → «Готово»',
 ];
 
 const PERIODS = [
@@ -159,15 +162,6 @@ function getDaysLeftInMonth(reference = new Date()) {
 
 function generateInsight(transactions) {
   return getTopCategoryInsight(transactions);
-}
-
-async function fetchPendingSmsTransactions() {
-  const response = await fetch(FINMIND_PENDING_URL);
-  if (!response.ok) {
-    throw new Error(`Pending fetch failed: ${response.status}`);
-  }
-  const data = await response.json();
-  return Array.isArray(data?.transactions) ? data.transactions : [];
 }
 
 async function persistAiInsight(insight) {
@@ -1273,31 +1267,28 @@ export default function App() {
     await persistAiInsight(insight);
   };
 
-  const mergePendingSmsIntoTransactions = async () => {
+  const pollPendingSMS = async () => {
     try {
-      const pending = await fetchPendingSmsTransactions();
-      if (!pending.length) {
-        return;
+      const response = await fetch(`${PROXY_URL}/pending`);
+      const data = await response.json();
+      if (data.transactions && data.transactions.length > 0) {
+        const stored = await AsyncStorage.getItem('transactions');
+        const existing = stored ? JSON.parse(stored) : [];
+        const updated = [...data.transactions, ...existing];
+        await AsyncStorage.setItem('transactions', JSON.stringify(updated));
+        const lastWithBalance = data.transactions.find(t => t.balance != null);
+        if (lastWithBalance) {
+          await AsyncStorage.setItem('currentBalance', String(lastWithBalance.balance));
+          setCurrentBalance(lastWithBalance.balance);
+        }
+        setTransactions(updated);
+        Alert.alert(
+          '💳 Новая транзакция',
+          `${data.transactions[0].type === 'income' ? '+' : ''}${data.transactions[0].amount} ₸ — ${data.transactions[0].merchant}`
+        );
       }
-
-      const mapped = mapParsedTransactions(pending);
-      setTransactions((prev) => {
-        const merged = [...mapped, ...prev];
-        void (async () => {
-          try {
-            await AsyncStorage.setItem(
-              TRANSACTIONS_STORAGE_KEY,
-              JSON.stringify(merged),
-            );
-            await recalculateInsight(merged);
-          } catch (error) {
-            console.error('Failed to persist pending SMS transactions:', error);
-          }
-        })();
-        return merged;
-      });
-    } catch (error) {
-      console.error('Failed to poll pending SMS transactions:', error);
+    } catch(e) {
+      console.log('SMS poll error:', e);
     }
   };
 
@@ -1306,11 +1297,8 @@ export default function App() {
       return undefined;
     }
 
-    mergePendingSmsIntoTransactions();
-    const intervalId = setInterval(
-      mergePendingSmsIntoTransactions,
-      SMS_POLL_INTERVAL_MS,
-    );
+    pollPendingSMS();
+    const intervalId = setInterval(pollPendingSMS, SMS_POLL_INTERVAL_MS);
     return () => clearInterval(intervalId);
   }, [onboardingComplete]);
 

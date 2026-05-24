@@ -250,40 +250,6 @@ function parseTransactionJson(anthropicBody) {
   return JSON.parse(cleaned.slice(0, end + 1));
 }
 
-function handleSms(res, body) {
-  const { text } = JSON.parse(body);
-  if (!text) {
-    res.writeHead(400, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Missing text' }));
-    return;
-  }
-
-  const payload = JSON.stringify({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 1024,
-    messages: [
-      {
-        role: 'user',
-        content: SMS_PROMPT_PREFIX + text,
-      },
-    ],
-  });
-
-  callAnthropic(payload)
-    .then(data => {
-      console.log('Anthropic SMS:', data.slice(0, 300));
-      const transaction = parseTransactionJson(data);
-      pendingTransactions.push(transaction);
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(transaction));
-    })
-    .catch(e => {
-      console.error(e);
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: e.message }));
-    });
-}
-
 function handlePdf(res, body) {
   const { base64, fileName } = JSON.parse(body);
 
@@ -324,12 +290,66 @@ function handlePdf(res, body) {
     });
 }
 
+function parseKaspiSMS(text) {
+  const lines = text.trim().split('\n').map(l => l.trim()).filter(Boolean);
+  if (!lines.length) return null;
+  const isExpense = lines[0].startsWith('Покупка:');
+  const isIncome = lines[0].startsWith('Пополнение:');
+  if (!isExpense && !isIncome) return null;
+  let amount = 0;
+  const conversionMatch = lines[0].match(/\(([0-9\s,]+)\s*₸\)/);
+  if (conversionMatch) {
+    amount = parseFloat(conversionMatch[1].replace(/\s/g, '').replace(',', '.'));
+  } else {
+    const simpleMatch = lines[0].match(/([0-9\s,]+)\s*₸/);
+    if (simpleMatch) amount = parseFloat(simpleMatch[1].replace(/\s/g, '').replace(',', '.'));
+  }
+  const merchant = lines[1] || 'Неизвестно';
+  let balance = null;
+  const balanceLine = lines.find(l => l.startsWith('Доступно:'));
+  if (balanceLine) {
+    const balMatch = balanceLine.match(/([0-9\s,]+)\s*₸/);
+    if (balMatch) balance = parseFloat(balMatch[1].replace(/\s/g, '').replace(',', '.'));
+  }
+  const today = new Date();
+  const date = `${String(today.getDate()).padStart(2,'0')}.${String(today.getMonth()+1).padStart(2,'0')}.${today.getFullYear()}`;
+  const m = merchant.toLowerCase();
+  let category = 'другое';
+  if (m.includes('apple') || m.includes('google') || m.includes('netflix') || m.includes('spotify')) category = 'развлечения';
+  else if (m.includes('bolt') || m.includes('yandex') || m.includes('такси') || m.includes('taxi')) category = 'транспорт';
+  else if (m.includes('магнум') || m.includes('small') || m.includes('food') || m.includes('burger') || m.includes('kfc') || m.includes('pizza')) category = 'еда';
+  else if (m.includes('apteka') || m.includes('аптека') || m.includes('doctor')) category = 'здоровье';
+  else if (isIncome) category = 'переводы';
+  return { date, merchant, amount: isExpense ? -amount : amount, type: isExpense ? 'expense' : 'income', category, balance };
+}
+
 http
   .createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     if (req.method === 'OPTIONS') {
       res.writeHead(200);
       res.end();
+      return;
+    }
+
+    if (req.method === 'POST' && req.url === '/sms') {
+      let body = '';
+      req.on('data', c => body += c);
+      req.on('end', () => {
+        try {
+          const { text } = JSON.parse(body);
+          const transaction = parseKaspiSMS(text);
+          if (transaction) {
+            pendingTransactions.push(transaction);
+            console.log('SMS parsed:', JSON.stringify(transaction));
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, transaction }));
+        } catch(e) {
+          res.writeHead(500);
+          res.end(JSON.stringify({ error: e.message }));
+        }
+      });
       return;
     }
 
@@ -349,11 +369,7 @@ http
     req.on('data', c => (body += c));
     req.on('end', () => {
       try {
-        if (pathname === '/sms') {
-          handleSms(res, body);
-        } else {
-          handlePdf(res, body);
-        }
+        handlePdf(res, body);
       } catch (e) {
         console.error(e);
         res.writeHead(500, { 'Content-Type': 'application/json' });
